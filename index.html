@@ -228,19 +228,22 @@ const isOpen=s=>save.admin||totalStars()>=s.need;
 let ac=null,master=null,voices=[];
 function audio(){if(!ac){try{ac=new (window.AudioContext||window.webkitAudioContext)();const comp=ac.createDynamicsCompressor();comp.threshold.value=-14;comp.ratio.value=4;comp.attack.value=.003;comp.release.value=.2;
   master=ac.createGain();master.gain.value=.9;master.connect(comp).connect(ac.destination)}catch(e){ac=null}}if(ac&&ac.state==='suspended')ac.resume();return ac}
-/* a piano-like voice: bright attack, partials that fade at different speeds, a soft hammer click. Returns a handle to stop it early. */
-function note(p,when,dur,vel=90,sustain=false){if(!save.sound)return null;const a=audio();if(!a)return null;
-  const t0=Math.max(a.currentTime,when),f=440*Math.pow(2,(p-69)/12),v=Math.min(1,vel/110)*(p<48?.85:p<60?.8:.9);
-  const len=Math.min(sustain?8:4,Math.max(.25,dur)),decay=Math.max(.6,3.2-(p-48)*.04);
-  const g=a.createGain();g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(.22*v,t0+.004);g.gain.setTargetAtTime(.11*v,t0+.004,.12);g.gain.setTargetAtTime(0.0001,t0+.06,sustain?decay*1.6:decay*.45);
-  g.gain.setTargetAtTime(0,t0+len,.09);
-  const lp=a.createBiquadFilter();lp.type='lowpass';lp.Q.value=.3;lp.frequency.setValueAtTime(Math.min(12000,f*10),t0);lp.frequency.setTargetAtTime(Math.max(900,f*2.5),t0,.35);
-  lp.connect(g).connect(master);
-  const parts=[[1,.6,0],[2,.28,3],[3,.12,-4],[4,.06,5],[1,.25,6]];const osc=[];
-  parts.forEach(([mul,amp,det])=>{const o=a.createOscillator(),og=a.createGain();o.type=mul===1&&det?'triangle':'sine';o.frequency.value=f*mul*(1+.0004*mul*mul);o.detune.value=det;og.gain.value=amp;
-    if(mul>1){og.gain.setValueAtTime(amp,t0);og.gain.setTargetAtTime(0,t0,.25/mul)}o.connect(og).connect(lp);o.start(t0);o.stop(t0+len+.6);osc.push(o)});
-  const voice={g,osc,end:t0+len+.6};voices.push(voice);voices=voices.filter(x=>x.end>a.currentTime);
-  if(voices.length>40){const old=voices.shift();try{old.g.gain.setTargetAtTime(0,a.currentTime,.02)}catch(e){}}
+/* Piano notes are made once per pitch (in the background, before the song starts) and then played back as ready-made sounds.
+   This is much lighter for phones than building every note from oscillators while playing. */
+const SR=22050,NL=3.2;const bank={};
+function synthInto(oc,p,t0){const f=440*Math.pow(2,(p-69)/12),decay=Math.max(.7,3.2-(p-48)*.04);
+  const g=oc.createGain();g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(.5,t0+.004);g.gain.setTargetAtTime(.25,t0+.004,.12);g.gain.setTargetAtTime(0.0001,t0+.06,decay*.9);g.gain.setTargetAtTime(0,t0+NL-.15,.04);
+  const lp=oc.createBiquadFilter();lp.type='lowpass';lp.Q.value=.3;lp.frequency.setValueAtTime(Math.min(9000,f*10),t0);lp.frequency.setTargetAtTime(Math.max(900,f*2.5),t0,.35);lp.connect(g).connect(oc.destination);
+  [[1,.6,0],[2,.28,3],[3,.12,-4],[4,.06,5],[1,.25,6]].forEach(([mul,amp,det])=>{const o=oc.createOscillator(),og=oc.createGain();o.type=mul===1&&det?'triangle':'sine';o.frequency.value=f*mul*(1+.0004*mul*mul);o.detune.value=det;og.gain.value=amp;
+    if(mul>1){og.gain.setValueAtTime(amp,t0);og.gain.setTargetAtTime(0,t0,.25/mul)}o.connect(og).connect(lp);o.start(t0);o.stop(t0+NL)})}
+async function prepare(pitches){const a=audio();if(!a)return;const need=[...new Set(pitches)].filter(p=>!bank[p]);if(!need.length)return;
+  const L=Math.round(SR*NL);const oc=new (window.OfflineAudioContext||window.webkitOfflineAudioContext)(1,L*need.length,SR);need.forEach((p,i)=>synthInto(oc,p,i*NL));
+  const buf=await oc.startRendering();const d=buf.getChannelData(0);
+  need.forEach((p,i)=>{const b=a.createBuffer(1,L,SR);const ch=b.getChannelData(0);ch.set(d.subarray(i*L,i*L+L));bank[p]=b})}
+function note(p,when,dur,vel=90,sustain=false){if(!save.sound)return null;const a=audio();if(!a||!bank[p])return null;
+  const t0=Math.max(a.currentTime,when),v=Math.min(1,vel/110)*(p<48?.42:p<60?.4:.46);const len=Math.min(sustain?NL-.2:NL-.4,Math.max(.25,dur));
+  const s=a.createBufferSource();s.buffer=bank[p];const g=a.createGain();g.gain.setValueAtTime(v,t0);g.gain.setTargetAtTime(0,t0+len,.08);s.connect(g).connect(master);s.start(t0);s.stop(Math.min(t0+NL,t0+len+.5));
+  const voice={g,end:t0+len+.5};voices.push(voice);if(voices.length>48){voices=voices.filter(x=>x.end>a.currentTime)}
   return voice}
 function stopVoice(v){if(!v||!ac)return;try{v.g.gain.cancelScheduledValues(ac.currentTime);v.g.gain.setTargetAtTime(0,ac.currentTime,.06)}catch(e){}}
 function buzz(){if(!save.sound)return;const a=audio();if(!a)return;const t0=a.currentTime;[220,233].forEach(f=>{const o=a.createOscillator(),g=a.createGain();o.type='sawtooth';o.frequency.value=f;g.gain.setValueAtTime(.08,t0);g.gain.exponentialRampToValueAtTime(.001,t0+.5);o.connect(g).connect(master);o.start(t0);o.stop(t0+.55)})}
@@ -248,7 +251,7 @@ function stopAll(){voices.forEach(stopVoice);voices=[]}
 
 /* ---------------- board (sharp on every screen) ---------------- */
 const cv=$('cv'),ctx=cv.getContext('2d');let W=0,H=0,DPR=1;
-function resize(){const b=$('board').getBoundingClientRect();DPR=Math.min(Math.max(1,window.devicePixelRatio||1),3);W=b.width;H=b.height;
+function resize(){const b=$('board').getBoundingClientRect();DPR=Math.min(Math.max(1,window.devicePixelRatio||1),2);W=b.width;H=b.height;
   cv.width=Math.round(W*DPR);cv.height=Math.round(H*DPR);ctx.setTransform(cv.width/W,0,0,cv.height/H,0,0)}
 new ResizeObserver(resize).observe($('board'));window.addEventListener('resize',resize);resize();
 const rowH=()=>H/VIS;
@@ -341,14 +344,14 @@ function rr(x,y,w,h,r){r=Math.max(0,Math.min(r,w/2,h/2));ctx.beginPath();ctx.mov
 /* the Piano Tiles look: a soft glowing background that changes colour as you earn stars, flat black tiles, see-through played tiles */
 const STAGES=[['#6f9cff','#9fd0ff','#c9e6ff'],['#8f8cff','#b9b2ff','#e2d4ff'],['#c78fe8','#f0b1d9','#ffd9e8'],['#5fc9d8','#8de3e0','#d7fbf3'],['#ffb36b','#ffd07a','#fff0c4'],['#ff8fa3','#ffb3c1','#ffe3ea']];
 let bgC=null;const parts=[];
-function makeBg(stage){const c=document.createElement('canvas');c.width=Math.max(1,Math.round(W*DPR));c.height=Math.max(1,Math.round(H*DPR));const g=c.getContext('2d');g.scale(DPR,DPR);const [a,b,d]=STAGES[Math.min(stage,STAGES.length-1)];
+function makeBg(stage){const c=document.createElement('canvas');c.width=Math.max(1,Math.round(W));c.height=Math.max(1,Math.round(H));const g=c.getContext('2d');const [a,b,d]=STAGES[Math.min(stage,STAGES.length-1)];
   const lg=g.createLinearGradient(0,H,W*.3,0);lg.addColorStop(0,a);lg.addColorStop(.6,b);lg.addColorStop(1,d);g.fillStyle=lg;g.fillRect(0,0,W,H);
   let r=7+stage*13;const rnd=()=>{r=(r*16807)%2147483647;return (r-1)/2147483646};
   for(let i=0;i<16;i++){const x=rnd()*W,y=rnd()*H,rad=20+rnd()*W*.28;const rg=g.createRadialGradient(x,y,0,x,y,rad);rg.addColorStop(0,'rgba(255,255,255,.28)');rg.addColorStop(.7,'rgba(255,255,255,.08)');rg.addColorStop(1,'rgba(255,255,255,0)');g.fillStyle=rg;g.beginPath();g.arc(x,y,rad,0,7);g.fill()}
-  bgC=c;if(!parts.length)for(let i=0;i<26;i++)parts.push({x:Math.random(),y:Math.random(),s:.5+Math.random()*1.4,v:.01+Math.random()*.03})}
+  bgC=c;$('board').style.background=`url(${c.toDataURL('image/jpeg',.85)}) center/100% 100% no-repeat`;if(!parts.length)for(let i=0;i<12;i++)parts.push({x:Math.random(),y:Math.random(),s:.5+Math.random()*1.4,v:.01+Math.random()*.03})}
 function draw(){const w=W/COLS,rh=rowH();const stage=Math.min(starsNow,5);
-  if(stage!==bgStage||!bgC||bgC.width!==Math.round(W*DPR)){bgStage=stage;makeBg(stage)}
-  ctx.drawImage(bgC,0,0,W,H);
+  if(stage!==bgStage||!bgC||bgC.width!==Math.round(W)){bgStage=stage;makeBg(stage)}
+  ctx.clearRect(0,0,W,H);
   ctx.fillStyle='#fff';const now=performance.now();for(const p of parts){p.y-=p.v*(state==='play'&&started?.016:.004);if(p.y<-.02)p.y=1.02;ctx.globalAlpha=.3+.35*Math.sin(p.x*40+now/900);ctx.beginPath();ctx.arc(p.x*W,p.y*H,p.s,0,7);ctx.fill()}ctx.globalAlpha=1;
   const px=1/(cv.width/W);ctx.fillStyle='rgba(255,255,255,.6)';for(let c=1;c<COLS;c++)ctx.fillRect(Math.round(c*w)-px*.5,0,px,H);
   for(const t of tiles){const r=tileRect(t);if(r.y>H||r.y+r.h<0)continue;const x=r.x+px,y=r.y+px,ww=r.w-px*2,hh=r.h-px*2;
@@ -389,7 +392,10 @@ function applyText(){const t=T();document.documentElement.lang=save.lang;const t
   $('sTitle').textContent=t.sTitle;$('sSound').textContent=t.sound;$('sLyrics').textContent=t.lyrics;$('sLang').textContent=t.lang;$('sTest').textContent=t.test;$('sAdmin').textContent=t.admin;$('testRow').hidden=!save.admin;$('sHow').textContent=t.how+(save.test?' '+t.testHow:'');
   const sb=$('soundBtn'),lb=$('lyrBtn'),tb=$('testBtn');sb.textContent=save.sound?t.on:t.off;sb.className='btn sm '+(save.sound?'gr':'off');lb.textContent=save.lyrics?t.on:t.off;lb.className='btn sm '+(save.lyrics?'gr':'off');tb.textContent=save.test?t.on:t.off;tb.className='btn sm '+(save.test?'gr':'off');const ab=$('adminBtn');ab.textContent=save.admin?t.on:t.off;ab.className='btn sm '+(save.admin?'gr':'off');$('langBtn').textContent=t.langV;
   $('againBtn').textContent=t.again;$('menuBtn').setAttribute('aria-label',t.menu);$('pTitle').textContent=t.paused;$('resumeBtn').textContent=t.resume;$('pMenuBtn').textContent=t.menu}
-function pick(s){audio();if(!isOpen(s)){toast(T().needMore(s.need-totalStars()));return}begin(s)}
+function pitchesOf(s){const ps=[];s.score.tiles.forEach(t=>{for(let k=1;k<t.ns.length;k+=4)ps.push(t.ns[k]);for(let k=1;k<t.ch.length;k+=4)ps.push(t.ch[k])});return ps}
+async function pick(s){audio();if(!isOpen(s)){toast(T().needMore(s.need-totalStars()));return}
+  const ps=pitchesOf(s);if(ps.some(p=>!bank[p])){showOnly('loading');$('lTitle').textContent=T().loading;$('lSub').textContent='';state='loading';await new Promise(r=>setTimeout(r,30));try{await prepare(ps)}catch(e){}}
+  begin(s)}
 function endGame(win){const before=totalStars();state='over';$('mark').hidden=true;mk=null;holds.clear();$('hud').hidden=true;if(!win)stopAll();
   const st=starsNow;
   const b=save.best[song.id]||{score:0,stars:0};const nb=score>b.score;
@@ -404,7 +410,7 @@ function pause(){if(state!=='play')return;state='paused';if(ac)ac.suspend();show
 function resume(){if(state!=='paused')return;state='play';showOnly(null);if(ac)ac.resume();last=performance.now()}
 $('againBtn').onclick=()=>pick(song);$('menuBtn').onclick=toMenu;$('pMenuBtn').onclick=()=>{if(ac)ac.resume();toMenu()};$('resumeBtn').onclick=resume;$('pauseBtn').onclick=pause;
 $('setBtn').onclick=()=>{applyText();showOnly('settings')};$('setClose').onclick=()=>{applyText();showOnly('menu')};
-$('soundBtn').onclick=()=>{save.sound=!save.sound;persist();applyText();if(save.sound)note(72,0,.8)};
+$('soundBtn').onclick=()=>{save.sound=!save.sound;persist();applyText();if(save.sound)prepare([72]).then(()=>note(72,0,.8))};
 $('lyrBtn').onclick=()=>{save.lyrics=!save.lyrics;persist();applyText()};
 $('testBtn').onclick=()=>{if(!save.admin)return;save.test=!save.test;persist();applyText()};
 $('adminBtn').onclick=()=>{if(save.admin){save.admin=false;save.test=false;persist();applyText();return}const c=prompt(T().adminAsk);if(c===null)return;if(c.trim()===ADMIN_CODE){save.admin=true;persist();applyText();toast(T().adminOn)}else toast(T().adminBad)};
