@@ -157,7 +157,7 @@ const TX={
   how:'Нажимай на чёрные плитки снизу вверх — каждая плитка играет ноты песни. Длинную плитку держи, пока она не закончится. Компьютер: клавиши D F J K.',
   fail:'Ой, мимо!',win:'Песня пройдена!',again:'Ещё раз',menu:'К песням',paused:'Пауза',resume:'Дальше',newBest:'Новый рекорд!',start:'СТАРТ',faster:'Быстрее!',sample:'Разминка',
   loading:'Готовим песню…',loadingX:'',loadErr:'Не получилось загрузить песню',
-  locked:n=>`Нужно ★ ${n}`,nigun:{slow:'Нигун · медленный',fast:'Нигун · быстрый'},nextUp:(s,n)=>`Следующая песня: <b>${s}</b> — ещё ${n} ★`,allOpen:'Все песни открыты! Собирай короны 👑',needMore:n=>`Собери ещё ${n} ★, чтобы открыть`,total:'Твои звёзды',unlocked:'Открыта новая песня!',
+  credit:'Звук пианино: Salamander Grand Piano, Alexander Holm (CC-BY 3.0).',locked:n=>`Нужно ★ ${n}`,nigun:{slow:'Нигун · медленный',fast:'Нигун · быстрый'},nextUp:(s,n)=>`Следующая песня: <b>${s}</b> — ещё ${n} ★`,allOpen:'Все песни открыты! Собирай короны 👑',needMore:n=>`Собери ещё ${n} ★, чтобы открыть`,total:'Твои звёзды',unlocked:'Открыта новая песня!',
   admin:'Админ',adminAsk:'Код админа:',adminOn:'Админ: все песни открыты',adminBad:'Неверный код',crown:'Корона!',stars3:'Три звезды! Дальше — короны',
   test:'Проверка песен (для вожатых)',testHow:'В проверке все песни открыты, игра играет сама, и можно отметить, где начинается каждая строка слов.',
   mkT:'Слова: нажимай «Строка», когда начинается следующая строка',mkLine:'Строка ▶',mkChorus:'Припев',mkBreak:'Без слов',mkUndo:'↶ Отменить',mkCopy:'Скопировать для Claude',mkCopied:'Скопировано!',mkDone:'Все строки отмечены. Если поют ещё — жми «Припев».',mkNx:'Следующая:'},
@@ -166,7 +166,7 @@ const TX={
   how:'Tap the black tiles from the bottom up — every tile plays the song’s notes. Hold a long tile until it ends. On a computer: keys D F J K.',
   fail:'Oops, missed!',win:'Song complete!',again:'Play again',menu:'Songs',paused:'Paused',resume:'Resume',newBest:'New best!',start:'START',faster:'Faster!',sample:'Warm-up',
   loading:'Getting the song ready…',loadingX:'',loadErr:'Couldn’t load the song',
-  locked:n=>`Needs ★ ${n}`,nigun:{slow:'Niggun · slow',fast:'Niggun · fast'},nextUp:(s,n)=>`Next song: <b>${s}</b> — ${n} more ★`,allOpen:'Every song is open! Go for crowns 👑',needMore:n=>`Collect ${n} more ★ to unlock`,total:'Your stars',unlocked:'New song unlocked!',
+  credit:'Piano sound: Salamander Grand Piano by Alexander Holm (CC-BY 3.0).',locked:n=>`Needs ★ ${n}`,nigun:{slow:'Niggun · slow',fast:'Niggun · fast'},nextUp:(s,n)=>`Next song: <b>${s}</b> — ${n} more ★`,allOpen:'Every song is open! Go for crowns 👑',needMore:n=>`Collect ${n} more ★ to unlock`,total:'Your stars',unlocked:'New song unlocked!',
   admin:'Admin',adminAsk:'Admin code:',adminOn:'Admin: every song is open',adminBad:'Wrong code',crown:'Crown!',stars3:'Three stars! Now for crowns',
   test:'Song check (for counselors)',testHow:'In song check every song is open, the game plays by itself, and you can mark where each line of the words starts.',
   mkT:'Words: tap “Line” when the next line starts',mkLine:'Line ▶',mkChorus:'Chorus',mkBreak:'No words',mkUndo:'↶ Undo',mkCopy:'Copy for Claude',mkCopied:'Copied!',mkDone:'All lines marked. If they sing more, tap “Chorus”.',mkNx:'Next:'}
@@ -241,11 +241,24 @@ function synthInto(oc,p,t0){const f=440*Math.pow(2,(p-69)/12),decay=Math.max(.7,
   const lp=oc.createBiquadFilter();lp.type='lowpass';lp.Q.value=.3;lp.frequency.setValueAtTime(Math.min(9000,f*10),t0);lp.frequency.setTargetAtTime(Math.max(900,f*2.5),t0,.35);lp.connect(g).connect(oc.destination);
   [[1,.6,0],[2,.28,3],[3,.12,-4],[4,.06,5],[1,.25,6]].forEach(([mul,amp,det])=>{const o=oc.createOscillator(),og=oc.createGain();o.type=mul===1&&det?'triangle':'sine';o.frequency.value=f*mul*(1+.0004*mul*mul);o.detune.value=det;og.gain.value=amp;
     if(mul>1){og.gain.setValueAtTime(amp,t0);og.gain.setTargetAtTime(0,t0,.25/mul)}o.connect(og).connect(lp);o.start(t0);o.stop(t0+NL)})}
-async function prepare(pitches){const a=audio();if(!a)return;const need=[...new Set(pitches)].filter(p=>!bank[p]);if(!need.length)return;
+/* Real piano: Salamander Grand Piano by Alexander Holm (CC-BY 3.0), one recorded note every 3 semitones from C1 to C8.
+   Each tap plays the nearest recording, retuned to the exact pitch. If the files can't load, the built-in piano is used. */
+const SAMPLE_NAMES=[];for(let o=1;o<=7;o++)['C','Ds','Fs','A'].forEach((n,i)=>SAMPLE_NAMES.push([n+o,12*(o+1)+i*3]));SAMPLE_NAMES.push(['C8',108]);
+const samp={};let sampState='none';
+async function loadSamples(){if(sampState!=='none')return;sampState='loading';const a=audio();
+  try{await Promise.all(SAMPLE_NAMES.map(async([n,m])=>{const r=await fetch('piano/'+n+'.mp3');if(!r.ok)throw new Error(n);const ab=await r.arrayBuffer();samp[m]=await new Promise((ok,no)=>a.decodeAudioData(ab,ok,no))}));sampState='ok'}
+  catch(e){sampState='failed'}}
+function nearestSample(p){let best=null,d=99;for(const k in samp){const dd=Math.abs(p-k);if(dd<d){d=dd;best=+k}}return best}
+async function prepare(pitches){const a=audio();if(!a)return;await loadSamples();if(sampState==='ok')return;const need=[...new Set(pitches)].filter(p=>!bank[p]);if(!need.length)return;
   const L=Math.round(SR*NL);const oc=new (window.OfflineAudioContext||window.webkitOfflineAudioContext)(1,L*need.length,SR);need.forEach((p,i)=>synthInto(oc,p,i*NL));
   const buf=await oc.startRendering();const d=buf.getChannelData(0);
   need.forEach((p,i)=>{const b=a.createBuffer(1,L,SR);const ch=b.getChannelData(0);ch.set(d.subarray(i*L,i*L+L));bank[p]=b})}
-function note(p,when,dur,vel=90,sustain=false){if(!save.sound)return null;const a=audio();if(!a||!bank[p])return null;
+function note(p,when,dur,vel=90,sustain=false){if(!save.sound)return null;const a=audio();if(!a)return null;
+  if(sampState==='ok'){const k=nearestSample(p);if(k===null)return null;const t0=Math.max(a.currentTime,when),v=Math.min(1,vel/105)*(p<48?.75:.85);
+    const len=Math.min(sustain?6:3.5,Math.max(.3,dur));const s=a.createBufferSource();s.buffer=samp[k];s.playbackRate.value=Math.pow(2,(p-k)/12);
+    const g=a.createGain();g.gain.setValueAtTime(v,t0);g.gain.setTargetAtTime(0,t0+len,.12);s.connect(g).connect(master);s.start(t0);s.stop(t0+len+.8);
+    const voice={g,end:t0+len+.8};voices.push(voice);if(voices.length>48)voices=voices.filter(x=>x.end>a.currentTime);return voice}
+  if(!bank[p])return null;
   const t0=Math.max(a.currentTime,when),v=Math.min(1,vel/110)*(p<48?.42:p<60?.4:.46);const len=Math.min(sustain?NL-.2:NL-.4,Math.max(.25,dur));
   const s=a.createBufferSource();s.buffer=bank[p];const g=a.createGain();g.gain.setValueAtTime(v,t0);g.gain.setTargetAtTime(0,t0+len,.08);s.connect(g).connect(master);s.start(t0);s.stop(Math.min(t0+NL,t0+len+.5));
   const voice={g,end:t0+len+.5};voices.push(voice);if(voices.length>48){voices=voices.filter(x=>x.end>a.currentTime)}
@@ -394,12 +407,12 @@ function applyText(){const t=T();document.documentElement.lang=save.lang;const t
   $('songList').innerHTML=SONGS.map((s,i)=>{const b=save.best[s.id]||{score:0,stars:0};const open=isOpen(s);
     return `<button class="song${open?'':' lock'}" type="button" data-i="${i}"><span class="disc" style="background:${open?s.color:'#9aa3bf'}">${open?'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>':lockSvg}</span><span style="flex:1;min-width:0"><b>${esc(s.title[save.lang])}</b>${s.nigun?`<i class="tagN">${t.nigun[s.nigun]}</i>`:''}${open?`<small>${t.best}: ${b.score}</small> <span class="stars">${starsRow(b.stars)}</span>`:`<small>${t.locked(s.need)}</small>`}</span><span class="btn sm${open?'':' off'}" style="pointer-events:none">${open?'▶':'🔒'}</span></button>`}).join('');
   $('songList').querySelectorAll('.song').forEach(b=>b.onclick=()=>pick(SONGS[+b.dataset.i]));
-  $('sTitle').textContent=t.sTitle;$('sSound').textContent=t.sound;$('sLyrics').textContent=t.lyrics;$('sLang').textContent=t.lang;$('sTest').textContent=t.test;$('sAdmin').textContent=t.admin;$('testRow').hidden=!save.admin;$('sHow').textContent=t.how+(save.test?' '+t.testHow:'');
+  $('sTitle').textContent=t.sTitle;$('sSound').textContent=t.sound;$('sLyrics').textContent=t.lyrics;$('sLang').textContent=t.lang;$('sTest').textContent=t.test;$('sAdmin').textContent=t.admin;$('testRow').hidden=!save.admin;$('sHow').textContent=t.how+(save.test?' '+t.testHow:'')+' '+t.credit;
   const sb=$('soundBtn'),lb=$('lyrBtn'),tb=$('testBtn');sb.textContent=save.sound?t.on:t.off;sb.className='btn sm '+(save.sound?'gr':'off');lb.textContent=save.lyrics?t.on:t.off;lb.className='btn sm '+(save.lyrics?'gr':'off');tb.textContent=save.test?t.on:t.off;tb.className='btn sm '+(save.test?'gr':'off');const ab=$('adminBtn');ab.textContent=save.admin?t.on:t.off;ab.className='btn sm '+(save.admin?'gr':'off');$('langBtn').textContent=t.langV;
   $('againBtn').textContent=t.again;$('menuBtn').setAttribute('aria-label',t.menu);$('pTitle').textContent=t.paused;$('resumeBtn').textContent=t.resume;$('pMenuBtn').textContent=t.menu}
 function pitchesOf(s){const ps=[];s.score.tiles.forEach(t=>{for(let k=1;k<t.ns.length;k+=4)ps.push(t.ns[k]);for(let k=1;k<t.ch.length;k+=4)ps.push(t.ch[k])});return ps}
 async function pick(s){audio();if(!isOpen(s)){toast(T().needMore(s.need-totalStars()));return}
-  const ps=pitchesOf(s);if(ps.some(p=>!bank[p])){showOnly('loading');$('lTitle').textContent=T().loading;$('lSub').textContent='';state='loading';await new Promise(r=>setTimeout(r,30));try{await prepare(ps)}catch(e){}}
+  const ps=pitchesOf(s);if(sampState!=='ok'&&(sampState!=='failed'||ps.some(p=>!bank[p]))){showOnly('loading');$('lTitle').textContent=T().loading;$('lSub').textContent='';state='loading';await new Promise(r=>setTimeout(r,30));try{await prepare(ps)}catch(e){}}
   begin(s)}
 function endGame(win){const before=totalStars();state='over';$('mark').hidden=true;mk=null;holds.clear();$('hud').hidden=true;if(!win)stopAll();
   const st=starsNow;
@@ -421,7 +434,7 @@ $('testBtn').onclick=()=>{if(!save.admin)return;save.test=!save.test;persist();a
 $('adminBtn').onclick=()=>{if(save.admin){save.admin=false;save.test=false;persist();applyText();return}const c=prompt(T().adminAsk);if(c===null)return;if(c.trim()===ADMIN_CODE){save.admin=true;persist();applyText();toast(T().adminOn)}else toast(T().adminBad)};
 $('langBtn').onclick=()=>{save.lang=save.lang==='ru'?'en':'ru';persist();applyText()};
 document.addEventListener('visibilitychange',()=>{if(document.hidden)pause()});
-window.__yekaTiles={get state(){return state},get scroll(){return scroll},get tiles(){return tiles},get score(){return score},get hits(){return hits},hitNext:(id='bot')=>{const t=nextTile();if(t)hit(t,id)},release,step:(dt)=>update(dt),get starsNow(){return starsNow},songs:()=>SONGS.map(s=>({id:s.id,need:s.need,open:isOpen(s),tiles:s.score.tiles.length}))};
+window.__yekaTiles={get state(){return state},get scroll(){return scroll},get tiles(){return tiles},get score(){return score},get hits(){return hits},hitNext:(id='bot')=>{const t=nextTile();if(t)hit(t,id)},release,step:(dt)=>update(dt),get piano(){return sampState},get starsNow(){return starsNow},songs:()=>SONGS.map(s=>({id:s.id,need:s.need,open:isOpen(s),tiles:s.score.tiles.length}))};
 applyText();showOnly('menu');requestAnimationFrame(frame);
 })();
 </script>
